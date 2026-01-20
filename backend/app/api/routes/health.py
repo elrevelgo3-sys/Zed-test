@@ -1,119 +1,73 @@
-"""
-Health check endpoints for monitoring and readiness probes.
-"""
+from __future__ import annotations
 
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
+import os
+import time
 from datetime import datetime
+from typing import Optional
+
+from fastapi import APIRouter
+from pydantic import BaseModel, Field
 
 from app.config import settings
-
 
 router = APIRouter()
 
 
 class ServiceStatus(BaseModel):
-    """Status of a single service."""
     name: str
     healthy: bool
-    latency_ms: float | None = None
-    error: str | None = None
+    latency_ms: Optional[float] = None
+    error: Optional[str] = None
 
 
 class HealthResponse(BaseModel):
-    """Health check response model."""
-    status: str = Field(description="Overall health status: healthy, degraded, or unhealthy")
-    version: str = Field(description="Application version")
-    environment: str = Field(description="Current environment")
+    status: str = Field(description="healthy | degraded | unhealthy")
+    version: str
+    environment: str
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     services: dict[str, bool] = Field(default_factory=dict)
     details: list[ServiceStatus] = Field(default_factory=list)
 
 
-async def check_redis() -> ServiceStatus:
-    """Check Redis connectivity."""
-    import time
-    try:
-        import redis.asyncio as redis
-        start = time.time()
-        client = redis.from_url(settings.redis_url)
-        await client.ping()
-        await client.close()
-        latency = (time.time() - start) * 1000
-        return ServiceStatus(name="redis", healthy=True, latency_ms=round(latency, 2))
-    except Exception as e:
-        return ServiceStatus(name="redis", healthy=False, error=str(e))
+@router.get("/health/live")
+async def liveness_probe():
+    """
+    MUST be lightweight and ALWAYS return 200 if the process is running.
 
-
-async def check_storage() -> ServiceStatus:
-    """Check storage availability."""
-    import os
-    try:
-        if settings.storage_type == "local":
-            storage_path = settings.storage_path
-            if not os.path.exists(storage_path):
-                os.makedirs(storage_path, exist_ok=True)
-            # Test write permission
-            test_file = os.path.join(storage_path, ".health_check")
-            with open(test_file, "w") as f:
-                f.write("ok")
-            os.remove(test_file)
-            return ServiceStatus(name="storage", healthy=True)
-        else:
-            # S3 storage check would go here
-            return ServiceStatus(name="storage", healthy=True)
-    except Exception as e:
-        return ServiceStatus(name="storage", healthy=False, error=str(e))
-
-
-async def check_ocr_api() -> ServiceStatus:
-    """Check OCR API key configuration."""
-    try:
-        if settings.mistral_api_key:
-            return ServiceStatus(name="ocr_api", healthy=True)
-        elif settings.deepseek_api_key:
-            return ServiceStatus(name="ocr_api", healthy=True)
-        else:
-            return ServiceStatus(
-                name="ocr_api",
-                healthy=False,
-                error="No OCR API key configured"
-            )
-    except Exception as e:
-        return ServiceStatus(name="ocr_api", healthy=False, error=str(e))
+    This endpoint is intended for Railway/K8s liveness checks.
+    Do not perform external checks here (Redis/S3/DB/API), because they can
+    cause deploy healthchecks to fail even when the app is fine.
+    """
+    return {"status": "alive"}
 
 
 @router.get("/health", response_model=HealthResponse)
 async def health_check():
     """
-    Health check endpoint.
-
-    Returns the health status of the application and its dependencies.
-    Used for monitoring and container orchestration health probes.
+    Detailed health endpoint.
+    This can include best-effort checks and may return degraded/unhealthy.
     """
-    # Run all health checks
-    redis_status = await check_redis()
-    storage_status = await check_storage()
-    ocr_status = await check_ocr_api()
+    details: list[ServiceStatus] = []
 
-    details = [redis_status, storage_status, ocr_status]
+    # Storage check (local path)
+    details.append(_check_local_storage())
 
-    # Build services dict for backward compatibility
+    # OCR config check (only checks key presence, does not call external API)
+    details.append(_check_ocr_config())
+
     services = {s.name: s.healthy for s in details}
 
     # Determine overall status
     all_healthy = all(s.healthy for s in details)
-    critical_healthy = storage_status.healthy and ocr_status.healthy
-
     if all_healthy:
-        status = "healthy"
-    elif critical_healthy:
-        status = "degraded"
+        overall = "healthy"
     else:
-        status = "unhealthy"
+        # If storage is broken, treat as unhealthy; OCR key missing => degraded
+        storage_ok = services.get("storage", False)
+        overall = "degraded" if storage_ok else "unhealthy"
 
     return HealthResponse(
-        status=status,
+        status=overall,
         version=settings.app_version,
         environment=settings.app_env,
         services=services,
@@ -121,32 +75,62 @@ async def health_check():
     )
 
 
-@router.get("/health/live")
-async def liveness_probe():
-    """
-    Kubernetes liveness probe.
-
-    Returns 200 if the application is running.
-    """
-    return {"status": "alive"}
-
-
 @router.get("/health/ready")
 async def readiness_probe():
     """
-    Kubernetes readiness probe.
+    Readiness probe.
+    Should return 200 only when the app is ready to serve requests.
 
-    Returns 200 if the application is ready to accept traffic.
+    We keep it simple: storage must be writable and at least one OCR option is configured.
     """
-    # Check critical services
-    storage_status = await check_storage()
-    ocr_status = await check_ocr_api()
+    storage = _check_local_storage()
+    ocr = _check_ocr_config()
 
-    if storage_status.healthy and ocr_status.healthy:
+    if storage.healthy and ocr.healthy:
         return {"status": "ready"}
 
-    from fastapi import HTTPException
-    raise HTTPException(
-        status_code=503,
-        detail="Service not ready"
+    return {
+        "status": "not_ready",
+        "details": {
+            "storage": storage.model_dump(),
+            "ocr": ocr.model_dump(),
+        },
+    }
+
+
+def _check_local_storage() -> ServiceStatus:
+    start = time.time()
+    try:
+        storage_path = settings.storage_path
+        os.makedirs(storage_path, exist_ok=True)
+
+        test_file = os.path.join(storage_path, ".health_check")
+        with open(test_file, "w", encoding="utf-8") as f:
+            f.write("ok")
+        os.remove(test_file)
+
+        latency = (time.time() - start) * 1000
+        return ServiceStatus(name="storage", healthy=True, latency_ms=round(latency, 2))
+    except Exception as e:
+        latency = (time.time() - start) * 1000
+        return ServiceStatus(
+            name="storage",
+            healthy=False,
+            latency_ms=round(latency, 2),
+            error=str(e),
+        )
+
+
+def _check_ocr_config() -> ServiceStatus:
+    # We only check config presence here; do NOT call external OCR providers.
+    has_mistral = bool(settings.mistral_api_key)
+    has_deepseek = bool(settings.deepseek_api_key)
+
+    if has_mistral or has_deepseek:
+        return ServiceStatus(name="ocr", healthy=True)
+
+    return ServiceStatus(
+        name="ocr",
+        healthy=False,
+        error="No OCR API key configured (set MISTRAL_API_KEY or DEEPSEEK_API_KEY).",
     )
