@@ -1,31 +1,33 @@
 """
-Pydantic models and schemas for the PDF to DOCX Converter.
+Pydantic models for the PDF to DOCX Converter API.
 """
 
 from app.models.schemas import (
     JobStatus,
     OCRProvider,
+    DocumentType,
     ConvertRequest,
     JobResponse,
-    JobStatusResponse,
+    ConvertResponse,
     ErrorResponse,
     HealthResponse,
     DocumentElement,
-    ElementType,
-    ElementStyle,
-    StructuredDocument,
+    PageStructure,
+    DocumentStructure,
+    JobStatistics,
 )
 
 __all__ = [
     "JobStatus",
     "OCRProvider",
+    "DocumentType",
     "ConvertRequest",
     "JobResponse",
-    "JobStatusResponse",
+    "ConvertResponse",
     "ErrorResponse",
     "HealthResponse",
     "DocumentElement",
-    "ElementType",
-    "ElementStyle",
-    "StructuredDocument",
+    "PageStructure",
+    "DocumentStructure",
+    "JobStatistics",
 ]
