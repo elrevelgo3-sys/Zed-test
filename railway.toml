@@ -1,0 +1,41 @@
+# Railway Configuration
+# https://docs.railway.app/reference/config-as-code
+
+[build]
+# Use Dockerfile for building
+builder = "dockerfile"
+dockerfilePath = "backend/Dockerfile"
+
+[deploy]
+# Number of instances
+numReplicas = 1
+
+# Health check endpoint
+healthcheckPath = "/health/live"
+healthcheckTimeout = 100
+
+# Restart policy
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+
+# Start command (override Dockerfile CMD if needed)
+# startCommand = "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+
+[service]
+# Internal port (Railway will map this to external port)
+internalPort = 8000
+
+[env]
+# Environment variables (can also be set in Railway dashboard)
+APP_ENV = "production"
+APP_DEBUG = "false"
+STORAGE_TYPE = "local"
+STORAGE_PATH = "/app/storage"
+LOG_LEVEL = "INFO"
+
+# These should be set in Railway dashboard as secrets:
+# - MISTRAL_API_KEY
+# - DEEPSEEK_API_KEY
+# - APP_SECRET_KEY
+# - DATABASE_URL (auto-provided if using Railway Postgres)
+# - REDIS_URL (auto-provided if using Railway Redis)

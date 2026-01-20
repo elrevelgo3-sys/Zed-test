@@ -1,0 +1,78 @@
+# Fly.io Configuration for PDF to DOCX Converter
+# Documentation: https://fly.io/docs/reference/configuration/
+
+app = "pdf-to-docx-converter"
+primary_region = "ams"  # Amsterdam, change to your preferred region
+
+# Kill signal and timeout
+kill_signal = "SIGINT"
+kill_timeout = "5s"
+
+[build]
+  dockerfile = "backend/Dockerfile"
+
+# Environment variables (secrets should be set via `fly secrets set`)
+[env]
+  APP_ENV = "production"
+  APP_DEBUG = "false"
+  STORAGE_TYPE = "local"
+  STORAGE_PATH = "/app/storage"
+  LOG_LEVEL = "INFO"
+  CORS_ORIGINS = "https://your-frontend-domain.com"
+
+# HTTP service configuration
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 100
+    soft_limit = 80
+
+# Health checks
+[[http_service.checks]]
+  grace_period = "30s"
+  interval = "30s"
+  method = "GET"
+  timeout = "10s"
+  path = "/health/live"
+
+# Machine configuration
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 2
+  memory_mb = 2048  # 2GB RAM - increase for larger PDFs
+
+# Persistent storage for uploaded files and outputs
+[mounts]
+  source = "pdf_storage"
+  destination = "/app/storage"
+
+# Multiple processes: API and Worker
+[processes]
+  app = "uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2"
+  worker = "celery -A app.workers.tasks worker --loglevel=info --concurrency=2"
+
+# Redis for task queue (using Upstash Redis add-on)
+# Run: fly redis create
+# Then set REDIS_URL secret: fly secrets set REDIS_URL=<your-redis-url>
+
+# Secrets to set (run these commands):
+# fly secrets set MISTRAL_API_KEY=your-mistral-key
+# fly secrets set DEEPSEEK_API_KEY=your-deepseek-key
+# fly secrets set APP_SECRET_KEY=your-random-secret-key
+# fly secrets set REDIS_URL=redis://...
+
+# Deployment configuration
+[deploy]
+  release_command = "echo 'No migrations needed'"
+  strategy = "rolling"
+
+# Scaling configuration
+# For production, consider:
+# fly scale count app=2 worker=2 --region ams

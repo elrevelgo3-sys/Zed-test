@@ -1,0 +1,29 @@
+# ===========================================
+# PDF to DOCX Converter - Python Dependencies
+# Simplified - no Celery, using FastAPI BackgroundTasks
+# ===========================================
+
+# Web Framework
+fastapi==0.109.2
+uvicorn[standard]==0.27.1
+pydantic==2.6.1
+pydantic-settings==2.1.0
+
+# HTTP Client (for OCR API calls)
+httpx==0.26.0
+
+# PDF Processing
+PyMuPDF==1.23.22
+
+# DOCX Generation
+python-docx==1.1.0
+
+# Image Processing
+Pillow==10.2.0
+
+# File Handling
+python-multipart==0.0.9
+aiofiles==23.2.1
+
+# Utils
+python-dotenv==1.0.1

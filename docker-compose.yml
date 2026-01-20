@@ -1,0 +1,190 @@
+version: '3.8'
+
+services:
+  # ===========================================
+  # Main API Service
+  # ===========================================
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: pdf-converter-api
+    ports:
+      - "8000:8000"
+    environment:
+      - APP_ENV=development
+      - APP_DEBUG=true
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/pdf_converter
+      - STORAGE_TYPE=local
+      - STORAGE_PATH=/app/storage
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - CORS_ORIGINS=http://localhost:3000,http://localhost:5173
+    volumes:
+      - ./backend:/app
+      - storage_data:/app/storage
+    depends_on:
+      - redis
+      - db
+    restart: unless-stopped
+    networks:
+      - pdf-converter-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ===========================================
+  # Celery Worker for Background Tasks
+  # ===========================================
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: pdf-converter-worker
+    command: celery -A app.workers.tasks worker --loglevel=info --concurrency=2
+    environment:
+      - APP_ENV=development
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/pdf_converter
+      - STORAGE_TYPE=local
+      - STORAGE_PATH=/app/storage
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+    volumes:
+      - ./backend:/app
+      - storage_data:/app/storage
+    depends_on:
+      - redis
+      - db
+    restart: unless-stopped
+    networks:
+      - pdf-converter-network
+
+  # ===========================================
+  # Celery Beat for Scheduled Tasks
+  # ===========================================
+  beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: pdf-converter-beat
+    command: celery -A app.workers.tasks beat --loglevel=info
+    environment:
+      - APP_ENV=development
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+      - worker
+    restart: unless-stopped
+    networks:
+      - pdf-converter-network
+
+  # ===========================================
+  # Redis - Message Broker & Cache
+  # ===========================================
+  redis:
+    image: redis:7-alpine
+    container_name: pdf-converter-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    networks:
+      - pdf-converter-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ===========================================
+  # PostgreSQL Database
+  # ===========================================
+  db:
+    image: postgres:15-alpine
+    container_name: pdf-converter-db
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=pdf_converter
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - pdf-converter-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ===========================================
+  # MinIO - S3-Compatible Storage (Optional)
+  # ===========================================
+  minio:
+    image: minio/minio:latest
+    container_name: pdf-converter-minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    restart: unless-stopped
+    networks:
+      - pdf-converter-network
+    profiles:
+      - s3  # Only start with: docker-compose --profile s3 up
+
+  # ===========================================
+  # Frontend (React) - Development
+  # ===========================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: pdf-converter-frontend
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - api
+    restart: unless-stopped
+    networks:
+      - pdf-converter-network
+    profiles:
+      - frontend  # Only start with: docker-compose --profile frontend up
+
+# ===========================================
+# Networks
+# ===========================================
+networks:
+  pdf-converter-network:
+    driver: bridge
+
+# ===========================================
+# Volumes
+# ===========================================
+volumes:
+  storage_data:
+    driver: local
+  redis_data:
+    driver: local
+  postgres_data:
+    driver: local
+  minio_data:
+    driver: local
